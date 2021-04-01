@@ -22,6 +22,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:uber_clone/helpers/HelperMethods.dart';
 import 'package:uber_clone/widgets/progressDialog.dart';
 import 'package:uber_clone/widgets/taxi_button.dart';
+import 'package:uber_clone/globalVariables.dart';
+import 'package:animated_text_kit/animated_text_kit.dart';
 
 class MainPage extends StatefulWidget {
   static const String id = 'mainPage';
@@ -36,9 +38,10 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
   GoogleMapController _mapController;
   double mapBottomPadding = 271;
   double rideDetailSheetHeight = 0;
-  double searchSheetHeight =  270 ;
+  double searchSheetHeight = 270;
+  double requestingSheetHeight = 0;
 
-
+  bool drawerCanOpen = true;
 
   List<LatLng> polyLineCoordinates = [];
 
@@ -53,6 +56,8 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
 
   DirectionDetails tripDirectionDetails;
 
+  DatabaseReference rideRef;
+
   void setupPositionLocator() async {
     Position position = await geoLocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.bestForNavigation);
@@ -64,18 +69,135 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
         await HelperMethods.findCordinateAddress(position, context);
   }
 
-  static final CameraPosition _kGooglePlex = CameraPosition(
-    target: LatLng(53.348194, -6.265181),
-    zoom: 14.4746,
-  );
-
-  void showDetailSheet( ) async {
+  void showDetailSheet() async {
     await getDirection();
     setState(() {
-      searchSheetHeight = 0 ;
-      rideDetailSheetHeight = 235 ;
-      mapBottomPadding = 271 ;
+      searchSheetHeight = 0;
+      rideDetailSheetHeight = 235;
+      mapBottomPadding = 271;
+      drawerCanOpen = false;
+    });
+  }
 
+  void showRequestingSheet(){
+    setState(() {
+      rideDetailSheetHeight = 0;
+      requestingSheetHeight = 195;
+      mapBottomPadding = 200;
+      drawerCanOpen = true;
+    });
+    createRideRequest();
+
+  }
+  @override
+  void initState() {
+    // TODO: implement initState
+    super.initState();
+    HelperMethods.getCurrentUserInfo();
+
+  }
+  Future<void> getDirection() async {
+    var pickup = Provider.of<AppData>(context, listen: false).pickupAddress;
+    var destination =
+        Provider.of<AppData>(context, listen: false).destinationAddress;
+    var pickupLatLng = LatLng(pickup.latitude, pickup.longitude);
+    var destinationLatLng = LatLng(destination.latitude, destination.longitude);
+
+    showDialog(
+        barrierDismissible: true,
+        context: context,
+        builder: (BuildContext ctx) => ProgressDialog(
+          status: 'Please Wait',
+        ));
+    var thisDetails = await HelperMethods.getDirectionDetails(
+        pickupLatLng, destinationLatLng);
+
+    setState(() {
+      tripDirectionDetails = thisDetails;
+    });
+
+    Navigator.pop(context);
+
+    PolylinePoints polylinePoints = PolylinePoints();
+    print(pickupLatLng);
+    print(destinationLatLng);
+    print(thisDetails.encodedPoints);
+
+    List<PointLatLng> results =
+    polylinePoints.decodePolyline(thisDetails.encodedPoints);
+
+    if (results.isNotEmpty) {
+      polyLineCoordinates.clear();
+      results.forEach((PointLatLng point) {
+        polyLineCoordinates.add(LatLng(point.latitude, point.longitude));
+      });
+      _polyLines.clear();
+    }
+    LatLngBounds bounds;
+    if (pickupLatLng.latitude > destinationLatLng.latitude &&
+        pickupLatLng.longitude > destinationLatLng.longitude) {
+      bounds =
+          LatLngBounds(southwest: destinationLatLng, northeast: pickupLatLng);
+    } else if (pickupLatLng.longitude > destinationLatLng.longitude) {
+      bounds = LatLngBounds(
+          southwest: LatLng(pickupLatLng.latitude, destinationLatLng.longitude),
+          northeast:
+          LatLng(destinationLatLng.latitude, pickupLatLng.longitude));
+    } else if (pickupLatLng.latitude > destinationLatLng.latitude) {
+      bounds = LatLngBounds(
+          southwest: LatLng(destinationLatLng.latitude, pickupLatLng.longitude),
+          northeast:
+          LatLng(pickupLatLng.latitude, destinationLatLng.longitude));
+    } else {
+      bounds =
+          LatLngBounds(southwest: pickupLatLng, northeast: destinationLatLng);
+    }
+    _mapController.animateCamera(CameraUpdate.newLatLngBounds(bounds, 70));
+    Marker pickupMarker = Marker(
+        markerId: MarkerId('pickup'),
+        position: pickupLatLng,
+        infoWindow: InfoWindow(title: pickup.placeName, snippet: 'My Location'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen));
+    Marker destinationMarker = Marker(
+        markerId: MarkerId('destination'),
+        position: destinationLatLng,
+        infoWindow:
+        InfoWindow(title: destination.placeName, snippet: 'Destination'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed));
+
+    Circle pickupCircle = Circle(
+        circleId: CircleId('pickup'),
+        strokeColor: Colors.green,
+        strokeWidth: 3,
+        radius: 12,
+        center: pickupLatLng,
+        fillColor: BrandColors.colorGreen);
+
+    Circle destinationCircle = Circle(
+        circleId: CircleId('destination'),
+        strokeColor: BrandColors.colorAccentPurple,
+        strokeWidth: 3,
+        radius: 12,
+        center: destinationLatLng,
+        fillColor: BrandColors.colorAccentPurple);
+
+    Polyline polyline = Polyline(
+      polylineId: PolylineId('polyID'),
+      color: Color.fromARGB(255, 95, 109, 237),
+      points: polyLineCoordinates,
+      jointType: JointType.round,
+      width: 4,
+      startCap: Cap.roundCap,
+      endCap: Cap.roundCap,
+      geodesic: true,
+      visible: true,
+    );
+    setState(() {
+      _polyLines.add(polyline);
+      _markers.add(pickupMarker);
+      _markers.add(destinationMarker);
+      _circles.add(pickupCircle);
+      _circles.add(destinationCircle);
     });
   }
 
@@ -179,7 +301,7 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
             markers: _markers,
             circles: _circles,
             mapType: MapType.normal,
-            initialCameraPosition: _kGooglePlex,
+            initialCameraPosition: GlobalVariables.initialPosition,
             onMapCreated: (GoogleMapController controller) {
               _controller.complete(controller);
               _mapController = controller;
@@ -191,7 +313,11 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
             left: 20,
             child: GestureDetector(
               onTap: () {
-                scaffoldKey.currentState.openDrawer();
+                if (drawerCanOpen) {
+                  scaffoldKey.currentState.openDrawer();
+                } else {
+                  resetApp();
+                }
               },
               child: Container(
                 decoration: BoxDecoration(
@@ -209,7 +335,7 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
                   backgroundColor: Colors.white,
                   radius: 20,
                   child: Icon(
-                    Icons.menu,
+                    (drawerCanOpen) ? Icons.menu : Icons.arrow_back,
                     color: Colors.black87,
                   ),
                 ),
@@ -253,7 +379,8 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
                       ),
                       Text(
                         "Where are you going ? ",
-                        style: TextStyle(fontSize: 18, fontFamily: 'Brand-Bold'),
+                        style:
+                            TextStyle(fontSize: 18, fontFamily: 'Brand-Bold'),
                       ),
                       SizedBox(height: 20),
                       GestureDetector(
@@ -263,7 +390,7 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
                               MaterialPageRoute(
                                   builder: (context) => SearchPage()));
                           if (response == 'getDirection') {
-                            showDetailSheet( );
+                            showDetailSheet();
                           }
                         },
                         child: Container(
@@ -368,13 +495,15 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
               child: Container(
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.only(topLeft: Radius.circular(15), topRight: Radius.circular(15)),
+                  borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(15),
+                      topRight: Radius.circular(15)),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black26,
                       blurRadius: 15.0,
                       spreadRadius: 0.5,
-                      offset: Offset(0.7, 0.7 ),
+                      offset: Offset(0.7, 0.7),
                     ),
                   ],
                 ),
@@ -384,26 +513,43 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
                   child: Column(
                     children: [
                       Container(
-                        width:double.infinity,
+                        width: double.infinity,
                         color: BrandColors.colorAccent1,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Row(
                             children: [
-                              Image.asset('images/taxi.png', height: 70, width: 70),
-                              SizedBox(
-                                width: 16
-                              ),
+                              Image.asset('images/taxi.png',
+                                  height: 70, width: 70),
+                              SizedBox(width: 16),
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text('Taxi', style: TextStyle(fontSize: 18, fontFamily: 'Brand-Bold'),),
-                                  Text('14km', style: TextStyle(fontSize: 16,color: BrandColors.colorTextLight),),
+                                  Text(
+                                    'Taxi',
+                                    style: TextStyle(
+                                        fontSize: 18, fontFamily: 'Brand-Bold'),
+                                  ),
+                                  Text(
+                                    (tripDirectionDetails != null)
+                                        ? tripDirectionDetails.distanceText
+                                        : '',
+                                    style: TextStyle(
+                                        fontSize: 16,
+                                        color: BrandColors.colorTextLight),
+                                  ),
                                 ],
                               ),
-                              Expanded(child: Container(),),
-                              Text('\$13', style: TextStyle(fontSize: 18, fontFamily: 'Brand-Bold'),),
-
+                              Expanded(
+                                child: Container(),
+                              ),
+                              Text(
+                                (tripDirectionDetails != null)
+                                    ? '\$ ${HelperMethods.estimateFare(tripDirectionDetails)}'
+                                    : '',
+                                style: TextStyle(
+                                    fontSize: 18, fontFamily: 'Brand-Bold'),
+                              ),
                             ],
                           ),
                         ),
@@ -413,13 +559,19 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Row(
                           children: [
-                            Icon(Icons.money, size: 18, color: BrandColors.colorTextLight,),
+                            Icon(
+                              Icons.money,
+                              size: 18,
+                              color: BrandColors.colorTextLight,
+                            ),
                             SizedBox(width: 16),
                             Text('Cash'),
                             SizedBox(width: 5),
-                            Icon(Icons.keyboard_arrow_down, size: 16, color: BrandColors.colorTextLight,),
-
-
+                            Icon(
+                              Icons.keyboard_arrow_down,
+                              size: 16,
+                              color: BrandColors.colorTextLight,
+                            ),
                           ],
                         ),
                       ),
@@ -427,134 +579,145 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
                       Spacer(),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: TaxiButton('Request Car', BrandColors.colorGreen, (){
-
+                        child: TaxiButton(
+                            'Request Car', BrandColors.colorGreen, () {
+                          showRequestingSheet();
                         }),
                       ),
-
-
                     ],
                   ),
-
                 ),
-
               ),
             ),
           ),
-
+          //Ride request
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: AnimatedSize(
+              vsync: this,
+              curve: Curves.easeIn,
+              duration: new Duration(milliseconds: 150),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(15),
+                      topRight: Radius.circular(15)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 15.0,
+                      spreadRadius: 0.5,
+                      offset: Offset(0.7, 0.7),
+                    ),
+                  ],
+                ),
+                height: requestingSheetHeight,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      SizedBox(height: 15),
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextLiquidFill(
+                          text: 'Requesting a ride ...',
+                          waveColor: BrandColors.colorTextSemiLight,
+                          boxBackgroundColor: Colors.white,
+                          textStyle:
+                              TextStyle(fontSize: 22.0, fontFamily: 'Brand-Bold'),
+                          boxHeight: 40.0,
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      GestureDetector(
+                        onTap: () {
+                          cancelRequest();
+                          resetApp();
+                        }, 
+                        child: Container(
+                          height: 50,
+                          width: 50,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(25),
+                            border: Border.all(
+                                width: 1.0, color: BrandColors.colorLightGrayFair),
+                          ),
+                          child: Icon(Icons.close, size: 25),
+                        ),
+                      ),
+                      SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        child: Text(
+                          'Cancel Ride',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Future<void> getDirection() async {
+
+
+  void createRideRequest(){
+    rideRef = FirebaseDatabase.instance.reference().child('rideRequest').push();
     var pickup = Provider.of<AppData>(context, listen: false).pickupAddress;
-    var destination =
-        Provider.of<AppData>(context, listen: false).destinationAddress;
-    var pickupLatLng = LatLng(pickup.latitude, pickup.longitude);
-    var destinationLatLng = LatLng(destination.latitude, destination.longitude);
+    var destination = Provider.of<AppData>(context, listen: false).destinationAddress;
+    Map pickupMap = {
+      'latitude' : pickup.latitude.toString(),
+      'longitude' : pickup.longitude.toString(),
+    };
 
-    showDialog(
-        barrierDismissible: true,
-        context: context,
-        builder: (BuildContext ctx) => ProgressDialog(
-              status: 'Please Wait',
-            ));
-    var thisDetails = await HelperMethods.getDirectionDetails(
-        pickupLatLng, destinationLatLng);
+    Map destinationMap = {
+      'latitude' : destination.latitude.toString(),
+      'longitude' : destination.longitude.toString(),
+    };
 
+    Map rideMap = {
+      'created_at' : DateTime.now().toString(),
+      'rider_name' : GlobalVariables.currentUserInfo.fullName,
+      'rider_phone' : GlobalVariables.currentUserInfo.phone,
+      'pickup_address' : pickup.placeName,
+      'destination_address' : destination.placeName,
+      'location' : pickupMap,
+      'destination' : destinationMap,
+      'payment_method' : 'Card',
+      'driver_id' : 'waiting',
+
+    };
+
+    rideRef.set(rideMap);
+  }
+
+  resetApp() {
     setState(() {
-      tripDirectionDetails = thisDetails;
-    });
-
-
-    Navigator.pop(context);
-
-    PolylinePoints polylinePoints = PolylinePoints();
-    print(pickupLatLng);
-    print(destinationLatLng);
-    print(thisDetails.encodedPoints);
-
-    List<PointLatLng> results =
-        polylinePoints.decodePolyline(thisDetails.encodedPoints);
-
-    if (results.isNotEmpty) {
       polyLineCoordinates.clear();
-      results.forEach((PointLatLng point) {
-        polyLineCoordinates.add(LatLng(point.latitude, point.longitude));
-
-      });
       _polyLines.clear();
-    }
-    LatLngBounds bounds;
-    if (pickupLatLng.latitude > destinationLatLng.latitude &&
-        pickupLatLng.longitude > destinationLatLng.longitude) {
-      bounds =
-          LatLngBounds(southwest: destinationLatLng, northeast: pickupLatLng);
-    } else if (pickupLatLng.longitude > destinationLatLng.longitude) {
-      bounds = LatLngBounds(
-          southwest: LatLng(pickupLatLng.latitude, destinationLatLng.longitude),
-          northeast:
-              LatLng(destinationLatLng.latitude, pickupLatLng.longitude));
-    } else if (pickupLatLng.latitude > destinationLatLng.latitude) {
-      bounds = LatLngBounds(
-          southwest: LatLng(destinationLatLng.latitude, pickupLatLng.longitude),
-          northeast:
-              LatLng(pickupLatLng.latitude, destinationLatLng.longitude));
-    } else {
-      bounds =
-          LatLngBounds(southwest: pickupLatLng, northeast: destinationLatLng);
-    }
-    _mapController.animateCamera(CameraUpdate.newLatLngBounds(bounds, 70));
-    Marker pickupMarker = Marker(
-        markerId: MarkerId('pickup'),
-        position: pickupLatLng,
-        infoWindow: InfoWindow(title: pickup.placeName, snippet: 'My Location'),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen));
-    Marker destinationMarker = Marker(
-        markerId: MarkerId('destination'),
-        position: destinationLatLng,
-        infoWindow: InfoWindow(title: destination.placeName, snippet: 'Destination'),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed));
-
-    Circle pickupCircle = Circle(
-      circleId: CircleId('pickup'),
-      strokeColor: Colors.green,
-      strokeWidth: 3,
-      radius: 12,
-      center: pickupLatLng,
-      fillColor: BrandColors.colorGreen
-    );
-
-    Circle destinationCircle = Circle(
-        circleId: CircleId('destination'),
-        strokeColor: BrandColors.colorAccentPurple,
-        strokeWidth: 3,
-        radius: 12,
-        center: destinationLatLng,
-        fillColor: BrandColors.colorAccentPurple
-    );
-
-    Polyline polyline = Polyline(
-      polylineId: PolylineId('polyID'),
-      color: Color.fromARGB(255, 95, 109, 237),
-      points: polyLineCoordinates,
-      jointType: JointType.round,
-      width: 4,
-      startCap: Cap.roundCap,
-      endCap: Cap.roundCap,
-      geodesic: true,
-      visible: true,
-
-    );
-    setState(() {
-      _polyLines.add(polyline);
-      _markers.add(pickupMarker);
-      _markers.add(destinationMarker);
-      _circles.add(pickupCircle);
-      _circles.add(destinationCircle);
+      _markers.clear();
+      _circles.clear();
+      rideDetailSheetHeight = 0;
+      requestingSheetHeight = 0 ;
+      searchSheetHeight = 270;
+      mapBottomPadding = 271;
+      drawerCanOpen = true;
+      setupPositionLocator();
     });
-
-
+  }
+  void cancelRequest(){
+    rideRef.remove();
   }
 }
